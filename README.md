@@ -1,20 +1,25 @@
-# Interactive Map（交互式地图）
+# Interactive Map &middot; 交互式地图
 
-在 Obsidian 笔记里嵌入可交互的 SVG 地图，实现**省 → 市 → 区县 层层下钻**：
-
-- **悬浮高亮**：鼠标悬停时区域放大并变色
-- **Ctrl+悬浮预览**：按住 Ctrl/Cmd 悬浮时弹出笔记的原生页面预览（和 wikilink 一样）
-- **点击跳转**：点击区域跳转到对应笔记，笔记不存在可自动创建
-- **层层下钻**：笔记里再嵌一张下级 SVG 地图，就能继续下钻；没有下级地图就是普通 md 笔记
+[English](#english) | [中文](#中文)
 
 ---
 
-## 快速开始
+## English
 
-插件内置了一张**中国 34 省级行政区地图**（`china_provinces_map.svg` + `.json`），零配置即可使用。
+### Installation
 
-1. 启用插件（设置 → 第三方插件 → 关闭安全模式 → 启用 Interactive Map）
-2. 新建一篇笔记，写入：
+1. Open **Settings → Community Plugins** in Obsidian
+2. Turn off **Restricted mode**
+3. Click **Browse**, search for "Interactive Map"
+4. Click **Install**, then **Enable**
+
+Or install manually: copy `main.js`, `manifest.json`, and `styles.css` into `VaultFolder/.obsidian/plugins/interactive-map/`.
+
+### Quick Start
+
+The plugin ships with a built-in **China provinces map** (`china_provinces_map.svg` + `.json`). Zero configuration needed.
+
+Create a code block in any note:
 
 ~~~
 ```interactive-map
@@ -22,162 +27,169 @@
 ```
 ~~~
 
-3. 切换到**阅读视图**，即可看到地图：
-   - 悬浮省份 → 放大变色 + 显示省名 tooltip
-   - 按住 **Ctrl**（Mac 用 Cmd）悬浮 → 弹出该省笔记的页面预览
-   - 点击省份 → 跳转到对应笔记（如 `北京.md`）
+Switch to **Reading view**:
+- **Hover** a province — it scales up and changes color with a tooltip
+- **Ctrl/Cmd + hover** — shows a native page preview popup (same as wikilinks)
+- **Click** a province — navigates to the corresponding note (e.g. `Beijing.md`)
 
-![悬浮预览](悬浮.png)
+![Hover preview](悬浮.png)
 
-> 如果没有对应笔记，插件默认会提示。可在设置中开启「笔记不存在时自动创建」，并设置「默认笔记目录」。
+> If no matching note exists, the plugin will show a notice. Enable "Auto-create notes" in settings to create notes automatically.
 
----
+### Drill-down: Province → City → District
 
-## 使用自己的地图（省 → 市 → 区县层层下钻）
+The plugin includes two Node.js scripts under `scripts/` that generate SVG maps and JSON sidecars from public DataV GeoJSON data.
 
-插件自带 `scripts/` 目录，包含两个 **Node.js 脚本**，用于从公开 GeoJSON 数据源生成符合插件格式的 SVG + JSON。
-
-### 数据源
-
-所有地图数据来自阿里 DataV 开放接口，免费、无需注册：
+**Data source** (free, no registration):
 
 ```
 https://geo.datav.aliyun.com/areas_v3/bound/<adcode>_full.json
 ```
 
-- `100000` = 中国（全国省级）
-- `310000` = 上海（全市区级）
-- `340000` = 安徽（全省市级）
-- 其他 adcode 见下方表格
-
-### 生成省级 / 市级地图
+**Generate a province or city map:**
 
 ```bash
-# 1. 下载 GeoJSON
-# 以广东省为例，adcode=440000
-curl -o 广东省.geojson "https://geo.datav.aliyun.com/areas_v3/bound/440000_full.json"
-
-# 2. 运行生成脚本
-node scripts/build_map.js 广东省.geojson 广东省
-
-# 3. 产物：广东省.svg + 广东省.json（与 geojson 同目录）
+curl -o Guangdong.geojson "https://geo.datav.aliyun.com/areas_v3/bound/440000_full.json"
+node scripts/build_map.js Guangdong.geojson Guangdong
+# → Guangdong.svg + Guangdong.json
 ```
 
-### 生成中国地图
+**Rebuild the China map:**
 
 ```bash
-# 1. 下载中国 GeoJSON
 curl -o china.geojson "https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json"
-
-# 2. 放到插件目录下，运行：
 node scripts/build_china.js
-
-# 产物：china_provinces_map.svg + china_provinces_map.json
-# 中国地图会自动处理南海诸岛，生成左下角小图框
+# → china_provinces_map.svg + china_provinces_map.json
 ```
 
-### 建立下钻链路
+**Create a drill-down chain:**
 
-假设已有广东省.svg 和广东省.json（放在 vault 的附件目录如 `附件/maps/`）：
-
-1. 建笔记 `广东.md`：
+1. Create `Guangdong.md` with:
 ~~~
 ```interactive-map
-[[广东省.svg]]
+[[Guangdong.svg]]
 ```
 ~~~
 
-2. 在中国地图笔记中点击「广东」→ 跳转到 `广东.md`，看到广东省市级地图
+2. Click "Guangdong" on the China map → navigates to `Guangdong.md` with the city-level map
+3. Repeat: download Guangzhou geojson (adcode=440100) → generate → create `Guangzhou.md`
 
-3. 重复上述步骤：下载广州市 geojson（adcode=440100）→ 生成广州市.svg → 建 `广州市.md`
+This gives you **China → Guangdong → Guangzhou** drill-down.
 
-这样就能实现 **中国 → 广东 → 广州** 的层层下钻。
+![Drill-down example](下探.png)
 
-![下钻示例](下探.png)
+### Province adcode reference
 
-### 常用省级 adcode
+| Province | adcode | Province | adcode | Province | adcode |
+|----------|--------|----------|--------|----------|--------|
+| Beijing | 110000 | Shanghai | 310000 | Tianjin | 120000 |
+| Chongqing | 500000 | Hebei | 130000 | Shanxi | 140000 |
+| Inner Mongolia | 150000 | Liaoning | 210000 | Jilin | 220000 |
+| Heilongjiang | 230000 | Jiangsu | 320000 | Zhejiang | 330000 |
+| Anhui | 340000 | Fujian | 350000 | Jiangxi | 360000 |
+| Shandong | 370000 | Henan | 410000 | Hubei | 420000 |
+| Hunan | 430000 | Guangdong | 440000 | Guangxi | 450000 |
+| Hainan | 460000 | Sichuan | 510000 | Guizhou | 520000 |
+| Yunnan | 530000 | Tibet | 540000 | Shaanxi | 610000 |
+| Gansu | 620000 | Qinghai | 630000 | Ningxia | 640000 |
+| Xinjiang | 650000 | Taiwan | 710000 | Hong Kong | 810000 |
+| Macau | 820000 | | | | |
 
-| 省份 | adcode | 省份 | adcode | 省份 | adcode |
-|------|--------|------|--------|------|--------|
-| 北京 | 110000 | 上海 | 310000 | 天津 | 120000 |
-| 重庆 | 500000 | 河北 | 130000 | 山西 | 140000 |
-| 内蒙古 | 150000 | 辽宁 | 210000 | 吉林 | 220000 |
-| 黑龙江 | 230000 | 江苏 | 320000 | 浙江 | 330000 |
-| 安徽 | 340000 | 福建 | 350000 | 江西 | 360000 |
-| 山东 | 370000 | 河南 | 410000 | 湖北 | 420000 |
-| 湖南 | 430000 | 广东 | 440000 | 广西 | 450000 |
-| 海南 | 460000 | 四川 | 510000 | 贵州 | 520000 |
-| 云南 | 530000 | 西藏 | 540000 | 陕西 | 610000 |
-| 甘肃 | 620000 | 青海 | 630000 | 宁夏 | 640000 |
-| 新疆 | 650000 | 台湾 | 710000 | 香港 | 810000 |
-| 澳门 | 820000 | | | | |
+### SVG format spec
 
-> 市级 adcode 可在 DataV 上按层级查看，或从省级 GeoJSON 的 `features[].properties.adcode` 获取。
+To create custom maps, each region must be an element (`<path>` / `<polygon>` / `<rect>` …) with:
 
----
+1. `class="state <slug>"` — slug identifies the region
+2. A `<title>` child element for the tooltip
+3. A matching `.json` sidecar mapping slugs to note names
 
-## SVG 格式约定
-
-如果你想手写 SVG 或从其他来源制作地图，只需满足以下约定：
-
-1. 每个区域是一个元素（`<path>` / `<polygon>` / `<rect>` …），class 中包含 `state <slug>`
-2. 区域元素**内嵌** `<title>中文名</title>` 作为 tooltip
-3. ⚠️ **不要**在 `<svg>` 根下放 `<title>`，否则所有区域都会显示同一个名
-4. 同名 `.json` 侧车将 slug 映射到笔记名：
-
-```json
-{
-  "regions": {
-    "440100": "广州市",
-    "440300": "深圳市"
-  }
-}
-```
-
-完整示例：
+Example:
 
 ```xml
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3" preserveAspectRatio="xMidYMid meet">
   <g>
     <path class="state 440100" fill="#BFBFBF" fill-rule="evenodd" stroke="#fff" stroke-width="0.01" d="M...Z">
-      <title>广州市</title>
-    </path>
-    <path class="state 440300" fill="#BFBFBF" fill-rule="evenodd" stroke="#fff" stroke-width="0.01" d="M...Z">
-      <title>深圳市</title>
+      <title>Guangzhou</title>
     </path>
   </g>
 </svg>
 ```
 
-- slug 推荐用 **6 位 adcode**（唯一、不依赖拼音）
-- 笔记名匹配 `.json` 侧车中定义的中文名
-- 插件查找笔记的顺序：`默认笔记目录/区域名` → 全库按文件名解析
+```json
+{ "regions": { "440100": "Guangzhou", "440300": "Shenzhen" } }
+```
+
+### Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Hover scale | `1.08` | Zoom factor on hover |
+| Hover color | `#f5a623` | Fill color on hover |
+| Default note folder | (empty) | Lookup/create notes under this folder |
+| Auto-create notes | Off | Create missing notes on click |
+| Open in new tab | Off | Open clicked notes in a new tab |
+
+### Shortcuts
+
+- **Ctrl/Cmd + hover**: show page preview (requires core "Page Preview" plugin)
+- Command palette → "Insert interactive map code block"
+- **Drag and drop** an SVG file into the editor to auto-insert a map code block
 
 ---
 
-## 设置
+## 中文
+
+### 安装
+
+1. Obsidian → 设置 → 第三方插件 → 关闭安全模式
+2. 点击**浏览**，搜索 "Interactive Map"
+3. 点击**安装**，然后**启用**
+
+或手动安装：将 `main.js`、`manifest.json`、`styles.css` 复制到 `仓库/.obsidian/plugins/interactive-map/`。
+
+### 快速开始
+
+插件内置了一张**中国 34 省级行政区地图**，零配置即可使用。
+
+在笔记中写入：
+
+~~~
+```interactive-map
+[[china_provinces_map.svg]]
+```
+~~~
+
+切换到**阅读视图**：
+- **悬浮**省份 — 区域放大变色 + tooltip 显示省名
+- **Ctrl/Cmd + 悬浮** — 弹出笔记的原生页面预览（和 wikilink 一样）
+- **点击**省份 — 跳转到对应笔记（如 `北京.md`）
+
+![悬浮预览](悬浮.png)
+
+### 层层下钻：省 → 市 → 区县
+
+从 DataV 公开数据生成地图：
+
+```bash
+curl -o 广东省.geojson "https://geo.datav.aliyun.com/areas_v3/bound/440000_full.json"
+node scripts/build_map.js 广东省.geojson 广东省
+# → 广东省.svg + 广东省.json
+```
+
+建 `广东.md` 内嵌地图 → 点中国地图的「广东」→ 跳转到市级地图 → 再生成广州市.svg → 点「广州」→ 进区级笔记。
+
+![下钻示例](下探.png)
+
+### SVG 格式约定
+
+区域元素带 `class="state <slug>"`，内嵌 `<title>`，配同名 `.json` 侧车映射 slug→笔记名。推荐用 6 位 adcode 作为 slug。
+
+### 设置
 
 | 设置项 | 默认值 | 说明 |
 |--------|--------|------|
-| 悬浮放大倍数 | `1.08` | 鼠标悬浮时区域缩放比例 |
-| 悬浮颜色 | `#f5a623` | 鼠标悬浮时的填充颜色 |
-| 默认笔记目录 | （空） | 例 `Project/MAP`，点击区域后在该目录查找/创建笔记 |
-| 笔记不存在时自动创建 | 关闭 | 开启后，点击无对应笔记的区域会自动新建 |
-| 在新标签页打开 | 关闭 | 开启后点击区域在新标签页打开笔记 |
-
----
-
-## 快捷键与命令
-
-- **Ctrl/Cmd + 悬浮**：弹出页面预览（依赖核心插件「页面预览」）
-- 命令面板 →「插入交互式地图代码块」：快速插入 ```interactive-map``` 骨架
-- 支持**拖拽 SVG 文件**到编辑器：自动插入交互式地图代码块（而非默认图片嵌入）
-
----
-
-## 小贴士
-
-- 改了 SVG 或 .json 后，需要**重新渲染笔记**（切到源码模式再切回阅读视图，或重开笔记）。插件按 mtime 缓存 SVG 文本。
-- 改了 main.js 需要**重载插件**（设置 → 第三方插件 → 关再开）。
-- 大地图（如中国省级）按 mtime 做文本缓存，重复渲染不重复读盘。
-- 侧车 `.json` 里的中文名建议用**短名**（北京而非北京市、广西而非广西壮族自治区），匹配既有笔记。
+| 悬浮放大倍数 | `1.08` | 悬浮时缩放比例 |
+| 悬浮颜色 | `#f5a623` | 悬浮时填充颜色 |
+| 默认笔记目录 | (空) | 在该目录下查找/创建笔记 |
+| 笔记不存在时自动创建 | 关闭 | 点击无笔记区域自动新建 |
+| 在新标签页打开 | 关闭 | 在新标签页打开笔记 |

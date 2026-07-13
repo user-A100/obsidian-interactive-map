@@ -3,7 +3,8 @@
   "name": "Interactive Map",
   "version": "1.0.0",
   "minAppVersion": "1.4.0",
-  "description": "交互式 SVG 地图：悬浮高亮放大、点击跳转到对应笔记，支持省→市→县层层下钻。",
-  "author": "interactive-map",
+  "description": "Embed interactive SVG maps with hover highlight, Ctrl+preview, click navigation, and province-to-city-to-district drill-down.",
+  "author": "user-A100",
+  "authorUrl": "https://github.com/user-A100",
   "isDesktopOnly": false
 }
