@@ -1,0 +1,46 @@
+/* ===== Interactive Map ===== */
+
+.interactive-map-container {
+  display: block;
+  margin: 0.6em 0;
+}
+
+.interactive-map-container svg {
+  max-width: 100%;
+  height: auto;
+  /* 放大时不要被 svg 视口裁掉 */
+  overflow: visible;
+}
+
+/* 每个省 / 市 / 县区域 */
+.interactive-map-container svg [class*="state"] {
+  cursor: pointer;
+  transition: transform 0.15s ease, fill 0.15s ease, opacity 0.15s ease, filter 0.15s ease;
+  /* 关键：让 transform-origin 以「自身边界框中心」为基准，否则会从画布左上角缩放 */
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.interactive-map-container svg [class*="state"]:hover {
+  transform: scale(var(--im-hover-scale, 1.08));
+  fill: var(--im-hover-color, #f5a623);
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.35));
+  opacity: 0.96;
+}
+
+.interactive-map-container .im-error {
+  color: var(--text-error);
+  font-size: 0.9em;
+  padding: 0.5em 0;
+}
+
+/* 无 state 标识的轮廓 path（如各省份轮廓图，原本 fill=#eee 近乎不可见）
+   给一个可见的灰填充与描边；带 class="state" 的省份不受影响。 */
+.interactive-map-container svg path:not([class*="state"]),
+.interactive-map-container svg polygon:not([class*="state"]),
+.interactive-map-container svg ellipse:not([class*="state"]) {
+  fill: var(--background-modifier-border-hover, #b0b0b0);
+  stroke: var(--text-muted, #888);
+  stroke-width: 0.6;
+  opacity: 1;
+}
