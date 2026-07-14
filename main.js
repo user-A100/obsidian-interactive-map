@@ -2,9 +2,10 @@
 // 交互式地图插件 —— 纯 JS，无需编译，使用原生 ES6 class（Chromium 原生支持）。
 // 在笔记中写 ```interactive-map 代码块，引用一张 SVG，即可悬浮高亮、点击跳转。
 // 关键：必须用 `class X extends Plugin` 让原型链正确建立，插件才能继承 Obsidian API。
-const { Plugin, PluginSettingTab, Setting, Notice, TFolder, MarkdownView } = require("obsidian");
+const { Plugin, PluginSettingTab, Setting, Notice, TFolder, MarkdownView, normalizePath } = require("obsidian");
+const HOVER_SOURCE = "interactive-map";
 
-// ===== 内置：中国 34 省级行政区 拼音 -> 中文 映射（用于自带的 china_provinces_map.svg）=====
+// ===== 兼容旧版中国省级地图的拼音 -> 中文映射 =====
 const PROVINCE_NAMES = {
   anhui: "安徽", aomen: "澳门", beijing: "北京", chongqing: "重庆",
   fujian: "福建", gansu: "甘肃", guangdong: "广东", guangxi: "广西",
@@ -33,6 +34,10 @@ class InteractiveMapPlugin extends Plugin {
     await this.loadSettings();
     this.addSettingTab(new InteractiveMapSettingTab(this.app, this));
     this.applyStyleVars();
+    this.app.workspace.registerHoverLinkSource(HOVER_SOURCE, {
+      display: "Interactive Map",
+      defaultMod: true,
+    });
 
     this.registerMarkdownCodeBlockProcessor("interactive-map", (source, el, ctx) => {
       this.renderMap(source, el, ctx).catch((err) => {
@@ -64,7 +69,7 @@ class InteractiveMapPlugin extends Plugin {
       const st = this.imHover;
       if (!st.target || !st.hoverParent) return;
       // 合成一个带「当前鼠标坐标 + ctrlKey」的真实 MouseEvent，交给核心 page-preview
-      const ev = new MouseEvent("mousemove", {
+      const ev = new MouseEvent("mouseover", {
         ctrlKey: true, metaKey: e.key === "Meta",
         clientX: st.x, clientY: st.y, bubbles: true,
       });
@@ -81,52 +86,91 @@ class InteractiveMapPlugin extends Plugin {
     if (!target) return;
     const name = target.getAttribute("data-name");
     if (!name) return;
+    const linktext = target.getAttribute("data-link") || name;
     const slug = target.getAttribute("data-slug");
     const ctrl = ev.ctrlKey || ev.metaKey;
     const key = slug + "|" + (ctrl ? "1" : "0");
     if (key === this.imHover.lastKey) return; // 同区域+同 Ctrl 态不重复弹
     this.imHover.lastKey = key;
     this.app.workspace.trigger("hover-link", {
-      event: ev, source: "interactive-map", hoverParent,
-      targetEl: target, linktext: name, sourcePath,
+      event: ev, source: HOVER_SOURCE, hoverParent,
+      targetEl: target, linktext, sourcePath,
     });
   }
 
   onunload() {
+    this.app.workspace.unregisterHoverLinkSource(HOVER_SOURCE);
     document.documentElement.style.removeProperty("--im-hover-scale");
     document.documentElement.style.removeProperty("--im-hover-color");
   }
 
   // ===== 拖拽 SVG 到笔记：自动插入交互式地图代码块 =====
   setupDropHandler() {
-    const handler = (evt) => this.onDrop(evt);
+    const handler = (evt) => {
+      this.onDrop(evt).catch((error) => {
+        console.error("[interactive-map] SVG 拖入失败", error);
+        new Notice("SVG 拖入失败：" + (error?.message || error));
+      });
+    };
     // 用 window 捕获阶段，确保早于 Obsidian 自带的 drop 处理，便于接管
     window.addEventListener("drop", handler, true);
     this.register(() => window.removeEventListener("drop", handler, true));
   }
 
-  onDrop(evt) {
+  getDropPosition(view, evt) {
+    const editor = view.editor;
+    try {
+      if (typeof editor.posAtCoords === "function") {
+        return editor.posAtCoords({ x: evt.clientX, y: evt.clientY });
+      }
+      const cm = editor.cm;
+      if (cm && typeof cm.posAtCoords === "function") {
+        const offset = cm.posAtCoords({ x: evt.clientX, y: evt.clientY });
+        if (Number.isInteger(offset) && typeof editor.offsetToPos === "function") {
+          return editor.offsetToPos(offset);
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  async importDroppedSvg(file, sourcePath) {
+    const targetPath = await this.app.fileManager.getAvailablePathForAttachment(file.name, sourcePath);
+    const content = await file.arrayBuffer();
+    await this.app.vault.createBinary(targetPath, content);
+    return targetPath;
+  }
+
+  async onDrop(evt) {
     const dt = evt.dataTransfer;
     if (!dt) return;
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) return;
+    const externalSvg = Array.from(dt.files || []).find((file) => /\.svg$/i.test(file.name));
+
     // 读取拖拽文本（Obsidian 内部拖文件会带 wikilink 或路径）
     let text = "";
     for (const type of dt.types) {
-      const v = dt.getData(type);
-      if (v && v.trim()) { text = v; break; }
+      try {
+        const value = dt.getData(type);
+        if (value && value.trim()) { text = value; break; }
+      } catch (_) {}
     }
-    const ref = this.extractSvgRef(text);
-    if (!ref) return; // 不是 SVG 拖拽，交给 Obsidian 默认处理
-    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (!view) return; // 当前没有 Markdown 编辑器，不接管
+    let ref = this.extractSvgRef(text);
+    if (!externalSvg && !ref) return; // 不是 SVG 拖拽，交给 Obsidian 默认处理
+
     // 接管：阻止 Obsidian 插入默认的 ![[x.svg]] 图片嵌入
     evt.preventDefault();
     evt.stopPropagation();
-    const block = "\n```interactive-map\n[[" + ref + "]]\n```\n";
     const editor = view.editor;
-    let pos = null;
-    try { pos = editor.posAtCoords({ x: evt.clientX, y: evt.clientY }); } catch (_) {}
+    const pos = this.getDropPosition(view, evt);
+    if (externalSvg) {
+      ref = await this.importDroppedSvg(externalSvg, view.file?.path || "");
+    }
+    const block = "\n```interactive-map\n[[" + ref + "]]\n```\n";
     if (pos) editor.replaceRange(block, pos);
     else editor.replaceSelection(block);
+    new Notice("已插入交互式 SVG 地图");
   }
 
   // 从拖拽文本提取 SVG 引用：[[x.svg]] / [[x.svg|别名]] / 裸路径 x.svg
@@ -164,10 +208,16 @@ class InteractiveMapPlugin extends Plugin {
   // 用 Obsidian 的链接解析找到 TFile（支持全库唯一文件名 / 相对路径）
   resolveFile(linkText, sourcePath) {
     if (!linkText) return null;
+    const cleanLink = normalizePath(linkText);
+    // 显式库内路径优先，不依赖 metadataCache 是否已完成批量文件索引。
+    const exact = this.app.vault.getAbstractFileByPath(cleanLink);
+    if (exact?.path) return exact;
     const file = this.app.metadataCache.getFirstLinkpathDest(linkText, sourcePath);
     if (file) return file;
-    const abs = this.app.vault.getAbstractFileByPath(linkText);
-    return abs && abs.path ? abs : null;
+    // 最后按唯一文件名兜底；若有重名则拒绝猜测，避免打开错误文件。
+    const leafName = cleanLink.slice(cleanLink.lastIndexOf("/") + 1);
+    const matches = this.app.vault.getFiles().filter((candidate) => candidate.name === leafName);
+    return matches.length === 1 ? matches[0] : null;
   }
 
   // 读取 SVG 文本（按 mtime 缓存）
@@ -208,6 +258,46 @@ class InteractiveMapPlugin extends Plugin {
     return slug;
   }
 
+  getRegionInfo(node, sidecar) {
+    const classes = (node.getAttribute("class") || "").trim().split(/\s+/).filter(Boolean);
+    const stateIndex = classes.indexOf("state");
+    const classSlug = stateIndex >= 0 ? classes[stateIndex + 1] : "";
+    const slug = node.getAttribute("data-adcode")
+      || node.getAttribute("data-slug")
+      || classSlug
+      || node.getAttribute("id")
+      || "";
+    const title = node.querySelector(":scope > title")?.textContent?.trim();
+    const mapped = sidecar?.[slug] ? String(sidecar[slug]) : PROVINCE_NAMES[slug];
+    const name = node.getAttribute("data-name") || mapped || title || slug;
+    return { slug, name };
+  }
+
+  getTargetCandidates(name, sourcePath) {
+    const cleanSource = normalizePath(sourcePath || "");
+    const slash = cleanSource.lastIndexOf("/");
+    const sourceDir = slash >= 0 ? cleanSource.slice(0, slash) : "";
+    const sourceName = cleanSource.slice(slash + 1).replace(/\.md$/i, "");
+    const baseValue = (this.settings.defaultBaseFolder || "").replace(/\/+$/, "");
+    const base = baseValue ? normalizePath(baseValue) : "";
+    const candidates = [];
+    if (sourceName) candidates.push(normalizePath([sourceDir, sourceName, name].filter(Boolean).join("/")));
+    if (base) candidates.push(normalizePath(`${base}/${name}`));
+    candidates.push(normalizePath(name));
+    return [...new Set(candidates.filter(Boolean))];
+  }
+
+  resolveRegionFile(name, sourcePath) {
+    for (const candidate of this.getTargetCandidates(name, sourcePath)) {
+      const exactPath = candidate.toLowerCase().endsWith(".md") ? candidate : `${candidate}.md`;
+      const exact = this.app.vault.getAbstractFileByPath(exactPath);
+      if (exact?.path) return exact;
+      const resolved = this.resolveFile(candidate, sourcePath);
+      if (resolved?.path) return resolved;
+    }
+    return null;
+  }
+
   async renderMap(source, el, ctx) {
     el.empty();
     el.addClass("interactive-map-container");
@@ -241,15 +331,19 @@ class InteractiveMapPlugin extends Plugin {
     el.appendChild(inlined);
 
     // 给每个区域打标记 + 中文 title 提示
-    const regionEls = Array.from(inlined.querySelectorAll("[class*='state']"));
+    const regionEls = Array.from(inlined.querySelectorAll("[class~='state'], [data-adcode]"));
     regionEls.forEach((node) => {
-      const cls = (node.getAttribute("class") || "").trim().split(/\s+/);
-      const i = cls.indexOf("state");
-      const slug = (i >= 0 && cls[i + 1]) ? cls[i + 1] : cls[cls.length - 1];
-      const name = this.resolveRegionName(slug, sidecar);
+      const { slug, name } = this.getRegionInfo(node, sidecar);
+      if (!slug || !name) return;
       node.setAttribute("data-slug", slug);
       node.setAttribute("data-name", name);
-      if (name) node.setAttribute("title", name);
+      const target = this.resolveRegionFile(name, ctx.sourcePath);
+      if (target) node.setAttribute("data-link", target.path.replace(/\.md$/i, ""));
+      if (!node.querySelector(":scope > title")) {
+        const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+        title.textContent = name;
+        node.prepend(title);
+      }
     });
 
     // 事件委托：点击区域 -> 打开对应笔记
@@ -259,13 +353,15 @@ class InteractiveMapPlugin extends Plugin {
       ev.preventDefault();
       const name = target.getAttribute("data-name");
       const slug = target.getAttribute("data-slug");
-      this.openRegion(name, slug, ctx.sourcePath);
+      this.openRegion(name, slug, ctx.sourcePath).catch((error) => {
+        console.error("[interactive-map] 打开区域失败", error);
+        new Notice("打开区域失败：" + (error?.message || error));
+      });
     });
 
-    // 悬浮预览：仅当 Ctrl/Meta 按下时才触发 hover-link（鼠标进入/移动/按键），
-    // 避免无 Ctrl 的 mouseover 先占用 hoverParent 导致后续 Ctrl 触发的预览失效。
+    // 先用真实 mouseover 事件通知 Page Preview；是否要求 Ctrl 由注册来源的 defaultMod 控制。
     // 「先悬浮、后按 Ctrl」由 setupHoverPreview() 的 keydown 监听补触发。
-    const hoverParent = { hoverPopover: null };
+    const hoverParent = el;
     const arm = (ev, t) => {
       this.imHover.x = ev.clientX; this.imHover.y = ev.clientY;
       this.imHover.target = t; this.imHover.hoverParent = hoverParent;
@@ -275,7 +371,7 @@ class InteractiveMapPlugin extends Plugin {
       const t = ev.target.closest("[data-slug]");
       if (t && inlined.contains(t)) {
         arm(ev, t);
-        if (ev.ctrlKey || ev.metaKey) this.imPreview(ev, t, hoverParent, ctx.sourcePath);
+        this.imPreview(ev, t, hoverParent, ctx.sourcePath);
       }
     });
     inlined.addEventListener("mousemove", (ev) => {
@@ -299,32 +395,30 @@ class InteractiveMapPlugin extends Plugin {
   }
 
   async openRegion(name, slug, sourcePath) {
-    const base = this.settings.defaultBaseFolder;
-    const candidates = [];
-    if (base) candidates.push(base.replace(/\/+$/, "") + "/" + name);
-    candidates.push(name);
-
-    let file = null;
-    for (const c of candidates) {
-      file = this.resolveFile(c, sourcePath);
-      if (file) break;
-    }
+    const baseValue = (this.settings.defaultBaseFolder || "").replace(/\/+$/, "");
+    const base = baseValue ? normalizePath(baseValue) : "";
+    const file = this.resolveRegionFile(name, sourcePath);
 
     if (file) {
-      // 用 Obsidian 原生链接打开：解析与「新标签页」行为与点击 wikilink 完全一致，最稳。
-      this.app.workspace.openLinkText(name, sourcePath, this.settings.openInNewTab);
+      // 使用完整库内路径，避免不同省份同名市/区时打开错误文件。
+      await this.app.workspace.openLinkText(file.path.replace(/\.md$/i, ""), sourcePath, this.settings.openInNewTab);
       return;
     }
 
     if (this.settings.createIfMissing) {
-      const dir = base ? base.replace(/\/+$/, "") : "";
+      const candidates = this.getTargetCandidates(name, sourcePath);
+      const nestedCandidate = candidates[0] || "";
+      const nestedDir = nestedCandidate.includes("/") ? nestedCandidate.slice(0, nestedCandidate.lastIndexOf("/")) : "";
+      const dir = nestedDir && this.app.vault.getAbstractFileByPath(nestedDir) instanceof TFolder
+        ? nestedDir
+        : base;
       const path = (dir ? dir + "/" : "") + name + ".md";
       try {
         if (dir && !this.app.vault.getAbstractFileByPath(dir)) {
           try { await this.app.vault.createFolder(dir); } catch (_) {}
         }
         await this.app.vault.create(path, "# " + name + "\n\n");
-        this.app.workspace.openLinkText(name, sourcePath, this.settings.openInNewTab);
+        await this.app.workspace.openLinkText(path.replace(/\.md$/i, ""), sourcePath, this.settings.openInNewTab);
       } catch (e) {
         new Notice("创建笔记失败：" + (e && e.message ? e.message : e));
       }
